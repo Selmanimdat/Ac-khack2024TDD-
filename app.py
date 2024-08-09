@@ -1,55 +1,88 @@
-import uvicorn
-from fastapi import FastAPI
-from pydantic import BaseModel
-from transformers import BertTokenizer, BertForSequenceClassification
-import torch
+import streamlit as st
+import spacy
+from vaderSentiment.vaderSentiment import SentimentIntensityAnalyzer
+import json
 
-# FastAPI uygulaması
-app = FastAPI()
+# SpaCy ve VADER yükle
+nlp = spacy.load("ner_model")  # Modelinizi buraya yükleyin
+analyzer = SentimentIntensityAnalyzer()
 
-# Model ve tokenizer'ı yükleme
-model_path = "./results"  # Eğittiğin modelin kaydedildiği yol
-model = BertForSequenceClassification.from_pretrained(model_path)
-tokenizer = BertTokenizer.from_pretrained(model_path)
+# Sayfa yapılandırması
+st.set_page_config(page_title="Teknofest NLP Projesi", layout="centered")
 
-# Modeli değerlendirme moduna al
-model.eval()
-
-class Item(BaseModel):
-    text: str  # Analiz edilecek yorum
-    entities: list  # Yorumdaki entity'ler
-
-@app.post("/predict/", response_model=dict)
-async def predict(item: Item):
-    text = item.text
-    entities = item.entities
-
-    results = []
-    for entity in entities:
-        # Yorum ve entity'yi tokenize etme
-        inputs = tokenizer(text, entity, return_tensors="pt", padding="max_length", truncation=True, max_length=128)
-
-        # Model ile tahmin yapma
-        with torch.no_grad():
-            outputs = model(**inputs)
-            logits = outputs.logits
-
-        # Sonuçları işleme
-        predicted_class_id = torch.argmax(logits, dim=1).item()
-        label_map = {0: 'olumlu', 1: 'olumsuz', 2: 'nötr'}
-        predicted_sentiment = label_map[predicted_class_id]
-
-        results.append({
-            "entity": entity,
-            "sentiment": predicted_sentiment
-        })
-
-    result = {
-        "entity_list": entities,
-        "results": results
+# Başlık ve stil
+st.title("HİSAR")
+st.markdown("""
+<style>
+    .main {
+        background-color: #f5f5f5;
     }
+    h1 {
+        color: #2c3e50;
+        text-align: center;
+        font-family: 'Arial', sans-serif;
+    }
+    .stButton button {
+        background-color: #2c3e50;
+        color: white;
+        border-radius: 5px;
+        font-size: 18px;
+    }
+    .stTextArea textarea {
+        font-size: 16px;
+    }
+</style>
+""", unsafe_allow_html=True)
 
-    return result
+# Giriş alanı
+st.subheader("Lütfen Yorumunuzu Girin")
+text_input = st.text_area("Yorumunuzu buraya yazın...", height=150)
 
-if __name__ == "__main__":
-    uvicorn.run(app, host="0.0.0.0", port=8000)
+# Buton ve model analizi
+if st.button("Analiz Et"):
+    if text_input:
+        # Metni analiz et
+        doc = nlp(text_input)
+
+        # Sonuçları saklamak için liste
+        entity_list = []
+        results = []
+
+        # Entity'lere duygu analizi ekle
+        for ent in doc.ents:
+            # Entity etrafındaki metni al
+            ent_text = ent.text
+            ent_start = ent.start_char
+            ent_end = ent.end_char
+            ent_context = text_input[ent_start:ent_end]
+
+            # Duygu analizi yap
+            ent_sentiment = analyzer.polarity_scores(ent_context)
+            sentiment_label = 'nötr'
+            if ent_sentiment['compound'] >= 0.05:
+                sentiment_label = 'olumlu'
+            elif ent_sentiment['compound'] <= -0.05:
+                sentiment_label = 'olumsuz'
+
+            # Entity ve duygu etiketini sakla
+            entity_list.append(ent_text)
+            results.append({
+                "entity": ent_text,
+                "sentiment": sentiment_label
+            })
+
+        # JSON formatında çıktı oluştur
+        output = {
+            "entity_list": entity_list,
+            "results": results
+        }
+
+        # JSON çıktısını yazdır
+        st.subheader("Analiz Sonuçları")
+        st.json(output)
+    else:
+        st.write("Lütfen bir yorum girin.")
+
+# Alt bilgi
+st.markdown("---")
+st.markdown("© HİSAR")
